@@ -15,7 +15,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class WordSegmentationModel(nn.Module):
     def __init__(self, input_dim, hidden_size, num_gru_layers, vocab, dropout):
         super(WordSegmentationModel, self).__init__()
-        self.num_classes = 5
+        self.num_classes = 4
         self.embedding = nn.Embedding(len(vocab), input_dim, padding_idx=0)
         self.biGru = nn.GRU(input_size=input_dim,
                             hidden_size=hidden_size,
@@ -161,12 +161,13 @@ def evaluate(model, test_data_path, vocab, max_sequence_length, batch_size):
             y_pred = model(x)
             for y_p, y_t, x_t in zip(y_pred, y, x):
                 y_p = torch.argmax(y_p, dim=-1)
+                # print(y_p)
 
                 y_t = y_t.tolist()
-                while -100 in y_t:
-                    y_t.remove(-100)  # 移除所有-100
+                # while -100 in y_t:
+                #     y_t.remove(-100)  # 移除所有-100
                 y_p = y_p.tolist()
-                y_p = y_p[:len(y_t)]  # 截断
+                # y_p = y_p[:len(y_t)]  # 截断
 
                 # decode -> 词序列
                 sentence = sequence_to_text(x_t, vocab)
@@ -178,7 +179,7 @@ def evaluate(model, test_data_path, vocab, max_sequence_length, batch_size):
                 set_p = set(seg_p)
                 set_t = set(seg_t)
                 common = set_p.intersection(set_t)  # 求交集
-                correct_all.append(len(list(common)) / len(y_t))  # 计算每个句子的分词正确率  正确数 / 总词数
+                correct_all.append(len(list(common)) / len(seg_t))  # 计算每个句子的分词正确率  正确数 / 总词数
 
     logger.info(f'平均正确率: {np.mean(correct_all)}')
     return np.mean(correct_all)
@@ -207,7 +208,7 @@ def predict(model_path, vocab_path, input_strings, max_sequence_length, char_dim
 
 
 def main():
-    train_epochs = 10
+    train_epochs = 15
     batch_size = 125  # 125
     learning_rate = 5e-5
     log_step = 100
@@ -262,17 +263,16 @@ def main():
 
 if __name__ == '__main__':
     max_sequence_length = 256
-    char_dim = 100
-    hidden_size = 200
+    char_dim = 200
+    hidden_size = 400
     num_gru_layers = 6
-    dropout = 0.1
+    dropout = 0.3
 
-    main()
+    # main()
 
     input_strings = ["同时国内有望出台新汽车刺激方案",
-                     "沪胶后市有望延续强势",
-                     "经过两个交易日的强势调整后",
-                     "昨日上海天然橡胶期货价格再度大幅上扬"]
+                     "沪胶后市有望延续强势，经过两个交易日的强势调整后，昨日上海天然橡胶期货价格再度大幅上扬",
+                     "中国政府将继续奉行独立自主的外交政策，在和平共处五项原则的基础上努力发展同世界各国的友好关系"]
     predict("model.pth",
             "vocab.txt",
             input_strings,
