@@ -12,24 +12,42 @@ else:
     logger.info('use cpu')
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+class Config:
+    def __init__(self):
+        self.max_sequence_length = 256
+        self.char_dim = 200
+        self.hidden_size = 400
+        self.num_gru_layers = 3
+        self.dropout = 0.3
+        self.train_epochs = 15
+        self.batch_size = 125
+        self.learning_rate = 5e-5
+        self.log_step = 100
+        self.train_data_path = 'dataset/train.txt'
+        self.test_data_path = 'dataset/test.txt'
+        self.model_save_path = 'model.pth'
+        self.vocab_path = 'vocab.txt'
+
+
 class WordSegmentationModel(nn.Module):
-    def __init__(self, input_dim, hidden_size, num_gru_layers, vocab, dropout):
+    def __init__(self, vocab, config):
         super(WordSegmentationModel, self).__init__()
-        self.num_classes = 4
-        self.embedding = nn.Embedding(len(vocab), input_dim, padding_idx=0)
-        self.biGru = nn.GRU(input_size=input_dim,
-                            hidden_size=hidden_size,
-                            num_layers=num_gru_layers,
+        self.num_classes = 4  # BIES标签
+        self.embedding = nn.Embedding(len(vocab), config.char_dim, padding_idx=0)  # 词嵌入
+        # 双向GRU
+        self.biGru = nn.GRU(input_size=config.char_dim,
+                            hidden_size=config.hidden_size,
+                            num_layers=config.num_gru_layers,
                             bidirectional=True,
                             batch_first=True,
-                            dropout=dropout)
-        self.classify = nn.Linear(hidden_size * 2, self.num_classes)
-        self.loss = nn.CrossEntropyLoss(ignore_index=-100).to(device)
+                            dropout=config.dropout)
+        self.classify = nn.Linear(config.hidden_size * 2, self.num_classes)  # 双向所以双倍hidden_size
+        self.loss = nn.CrossEntropyLoss(ignore_index=-100).to(device)  # padding不计入损失
 
     def forward(self, x, y=None):
         # input_shape: (batch_size, sentence_length)
         x = self.embedding(x)  # output_shape: (batch_size, sentence_length, input_dim)
-        outputs, _ = self.biGru(x)  # output_shape: (batch_size, sentence_length, hidden_size * 2)
+        outputs, _ = self.biGru(x)  # output_shape: (batch_size, sentence_length, hidden_size * 2)  双向所以双倍hidden_size
         y_pred = self.classify(outputs)
         if y is not None:
             return self.loss(y_pred.view(-1, self.num_classes), y.view(-1))
@@ -37,14 +55,15 @@ class WordSegmentationModel(nn.Module):
             return y_pred
 
 class CWSDataset(Dataset):
-    def __init__(self, data_path, vocab, max_sequence_length):
+    def __init__(self, data_path, vocab, config):
         super(CWSDataset, self).__init__()
         self.vocab = vocab
         self.data_path = data_path
-        self.max_sequence_length = max_sequence_length
+        self.max_sequence_length = config.max_sequence_length
         self.load()
 
     def load(self):
+        # 加载数据集
         self.data = []
         with open(self.data_path, 'r', encoding='utf8') as file:
             words = []
@@ -72,8 +91,6 @@ class CWSDataset(Dataset):
     def padding(self, sequence, label):
         """
         用于词表转换后, 截断或者填充句子
-        :param max_sequence: 最大截断数
-        :param sequence: 句子序列
         :return:
         """
         if len(sequence) >= self.max_sequence_length:
@@ -90,15 +107,33 @@ class CWSDataset(Dataset):
         return self.data[idx]
 
 def sentence_to_sequence(sentence, vocab):
+    """
+    词表编码encode
+    :param sentence:
+    :param vocab:
+    :return:
+    """
     sequence = [vocab.get(char, vocab['[UNK]']) for char in sentence]
     return sequence
 
 def sequence_to_text(sequence, vocab):
+    """
+    词表编码decode
+    :param sequence:
+    :param vocab:
+    :return:
+    """
     keys = list(vocab.keys())
     text = [keys[index] for index in sequence]
     return text
 
 def padding_sequence(sequence, max_sequence_length):
+    """
+    序列填充
+    :param sequence:
+    :param max_sequence_length:
+    :return:
+    """
     if len(sequence) >= max_sequence_length:
         return sequence[:max_sequence_length]
     else:
@@ -106,7 +141,6 @@ def padding_sequence(sequence, max_sequence_length):
 def labels_mapping(labels):
     """
     序列标注标签体系(B、I、E、S),四个标签分别表示单字处理单词的起始、中间、终止位置或者该单字独立成词
-    - PAK 对应 -100
     - B-CWS 对应 0
     - I-CWS 对应 1
     - E-CWS 对应 2
@@ -127,6 +161,11 @@ def labels_mapping(labels):
     return mapping
 
 def build_vocab(vocab_path):
+    """
+    读取词表
+    :param vocab_path:
+    :return:
+    """
     vocab = {}
     with open(vocab_path, 'r', encoding='utf8') as f:
         for i, line in enumerate(f):
@@ -134,12 +173,25 @@ def build_vocab(vocab_path):
             vocab[char] = i
     return vocab
 
-def build_dataset(data_path, vocab, max_sequence_length, batch_size):
-    dataset = CWSDataset(data_path, vocab, max_sequence_length)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
+def build_dataset(data_path, vocab, config):
+    """
+    建立数据集
+    :param data_path:
+    :param vocab:
+    :param config:
+    :return:
+    """
+    dataset = CWSDataset(data_path, vocab, config)
+    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, pin_memory=True)
     return dataloader
 
 def get_seg_list(sentence, label):
+    """
+    输入字序列和标签序列，返回分词列表
+    :param sentence:
+    :param label:
+    :return:
+    """
     tmp_string = ''
     seg_list = []
     for i, p in enumerate(label):
@@ -149,9 +201,9 @@ def get_seg_list(sentence, label):
             tmp_string = ''
     return seg_list
 
-def evaluate(model, test_data_path, vocab, max_sequence_length, batch_size):
-    model.eval()
-    dataloader = build_dataset(test_data_path, vocab, max_sequence_length, batch_size)
+def evaluate(model, vocab, config):
+    model.eval()  # 评价模式
+    dataloader = build_dataset(config.test_data_path, vocab, config)  # 加载测试数据集
     correct_all = []
     for x, y in tqdm(dataloader, desc='评估分词正确率'):
         x = x.to(device)
@@ -163,11 +215,8 @@ def evaluate(model, test_data_path, vocab, max_sequence_length, batch_size):
                 y_p = torch.argmax(y_p, dim=-1)
                 # print(y_p)
 
-                y_t = y_t.tolist()
-                # while -100 in y_t:
-                #     y_t.remove(-100)  # 移除所有-100
+                y_t = y_t.tolist()  # 在这里进行tolist()可以使用gpu计算，速度快很多，不要放进别的函数里，那样会切换至cpu
                 y_p = y_p.tolist()
-                # y_p = y_p[:len(y_t)]  # 截断
 
                 # decode -> 词序列
                 sentence = sequence_to_text(x_t, vocab)
@@ -184,21 +233,23 @@ def evaluate(model, test_data_path, vocab, max_sequence_length, batch_size):
     logger.info(f'平均正确率: {np.mean(correct_all)}')
     return np.mean(correct_all)
 
-def predict(model_path, vocab_path, input_strings, max_sequence_length, char_dim, hidden_size, num_gru_layers):
-    vocab = build_vocab(vocab_path)
-    model = WordSegmentationModel(char_dim, hidden_size, num_gru_layers, vocab, dropout).to(device)
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
+def predict(input_strings, config):
+    vocab = build_vocab(config.vocab_path)  # 建立词表
+    model = WordSegmentationModel(vocab, config).to(device)  # 建模
+    model.load_state_dict(torch.load(config.model_save_path))  # 加载权重
+    model.eval()  # 评价模式
     for input_string in input_strings:
-        x = sentence_to_sequence(input_string, vocab)
-        x = padding_sequence(x, max_sequence_length)
+        x = sentence_to_sequence(input_string, vocab)  # encode
+        x = padding_sequence(x, config.max_sequence_length)  # padding
+
         with torch.no_grad():
             x = torch.LongTensor([x])
             x = x.to(device)
-            y_pred = model.forward(x)[0]
+
+            y_pred = model.forward(x)[0]  # 预测
             result = torch.argmax(y_pred, dim=-1)
             result = result.tolist()[:len(input_string)]
-            for i, p in enumerate(result):
+            for i, p in enumerate(result):  # 分词
                 if p == 2 or p == 3:
                     print(input_string[i], end=' ')
                 else:
@@ -208,38 +259,33 @@ def predict(model_path, vocab_path, input_strings, max_sequence_length, char_dim
 
 
 def main():
-    train_epochs = 15
-    batch_size = 125  # 125
-    learning_rate = 5e-5
-    log_step = 100
+    logger.info(parameters_dict)
 
-
-    train_data_path = 'dataset/train.txt'
-    test_data_path = 'dataset/test.txt'
-    model_save_path = 'model.pth'
-    vocab_path = 'vocab.txt'
-    vocab = build_vocab(vocab_path)
-    data_loader = build_dataset(train_data_path, vocab, max_sequence_length, batch_size)
-    model = WordSegmentationModel(char_dim, hidden_size, num_gru_layers, vocab, dropout).to(device)
-    optim = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    vocab = build_vocab(config.vocab_path)  # 建立词表
+    data_loader = build_dataset(config.train_data_path, vocab, config)  # 加载训练数据集
+    model = WordSegmentationModel(vocab, config).to(device)  # 建模
+    optim = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)  # 选择优化器
 
     print('=========开始训练=========')
     log = []
     steps = 0
-    for epoch in range(train_epochs):
+    for epoch in range(config.train_epochs):
         model.train()
         watch_loss = []
-        start = time.time()
+        start = time.time()  # 记录时间
+
         for x, y in data_loader:
             x = x.to(device)
             y = y.to(device)
-            loss = model.forward(x, y)
-            loss.backward()
-            optim.step()
-            optim.zero_grad()
+
+            loss = model.forward(x, y)  # 计算损失
+            loss.backward()  # 反向传播
+            optim.step()  # 权重更新
+            optim.zero_grad()  # 梯度清零
+
             watch_loss.append(loss.item())
             steps += 1
-            if steps % log_step == 0:
+            if steps % config.log_step == 0:  # 每log_step步记录
                 logger.info("=========\n第%d步平均loss:%f 耗时:%.2fs" % (steps, np.mean(watch_loss), time.time() - start))
                 start = time.time()
 
@@ -247,14 +293,15 @@ def main():
 
         logger.info("=========\n第%d轮平均loss:%f" % (epoch + 1, np.mean(watch_loss)))
 
-        acc = evaluate(model, test_data_path, vocab, max_sequence_length, batch_size)
+        acc = evaluate(model, vocab, config)  # 评价
+
         log.append([acc, mean_loss])
         if epoch != 0:
             log_display(log)  # 每轮更新一次曲线
 
     # log_display(log)
 
-    torch.save(model.state_dict(), model_save_path)
+    torch.save(model.state_dict(), config.model_save_path)  # 保存模型
     return
 
 
@@ -262,21 +309,28 @@ def main():
 
 
 if __name__ == '__main__':
-    max_sequence_length = 256
-    char_dim = 200
-    hidden_size = 400
-    num_gru_layers = 6
-    dropout = 0.3
+    # 初始化配置
+    config = Config()
 
-    # main()
+    # 超参
+    config.train_epochs = 15
+    config.batch_size = 125  # 125
+    config.learning_rate = 5e-5
+    config.log_step = 100
+
+    config.max_sequence_length = 256
+    config.char_dim = 200
+    config.hidden_size = 400
+    config.num_gru_layers = 3
+    config.dropout = 0.3
+
+
+    parameters_dict = config.__dict__  # 打印超参
+    print(parameters_dict)
+
+    # main()  # 训练
 
     input_strings = ["同时国内有望出台新汽车刺激方案",
                      "沪胶后市有望延续强势，经过两个交易日的强势调整后，昨日上海天然橡胶期货价格再度大幅上扬",
                      "中国政府将继续奉行独立自主的外交政策，在和平共处五项原则的基础上努力发展同世界各国的友好关系"]
-    predict("model.pth",
-            "vocab.txt",
-            input_strings,
-            max_sequence_length,
-            char_dim,
-            hidden_size,
-            num_gru_layers)
+    predict(input_strings, config)  # 预测
