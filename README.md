@@ -36,6 +36,3 @@ optimizer=AdamW
 ```
 ### 训练过程
 <img src="train.jpg">
-
-### 评价
-正确率80%左右
